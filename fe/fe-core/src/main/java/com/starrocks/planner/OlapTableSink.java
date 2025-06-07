@@ -209,6 +209,7 @@ public class OlapTableSink extends DataSink {
         tSink.setEnable_replicated_storage(enableReplicatedStorage);
         tSink.setAutomatic_bucket_size(automaticBucketSize);
         tSink.setEncryption_meta(GlobalStateMgr.getCurrentState().getKeyMgr().getCurrentKEKAsEncryptionMeta());
+        tSink.setEnable_data_file_bundling(dstTable.isFileBundling());
         Database db = GlobalStateMgr.getCurrentState().getLocalMetastore().getDb(dbId);
         if (db != null) {
             tSink.setDb_name(db.getFullName());
@@ -552,7 +553,7 @@ public class OlapTableSink extends DataSink {
                         TOlapTablePartition tPartition = new TOlapTablePartition();
                         tPartition.setId(physicalPartition.getId());
                         setRangeKeys(rangePartitionInfo, partition, tPartition);
-                        setIndexAndBucketNums(physicalPartition, tPartition);
+                        setMaterializedIndexes(physicalPartition, tPartition);
                         partitionParam.addToPartitions(tPartition);
                         LOG.debug("add partition: {} physicalPartition: {}", tPartition, physicalPartition);
                     }
@@ -628,7 +629,7 @@ public class OlapTableSink extends DataSink {
                         TOlapTablePartition tPartition = new TOlapTablePartition();
                         tPartition.setId(physicalPartition.getId());
                         setListPartitionValues(listPartitionInfo, partition, tPartition);
-                        setIndexAndBucketNums(physicalPartition, tPartition);
+                        setMaterializedIndexes(physicalPartition, tPartition);
                         partitionParam.addToPartitions(tPartition);
                         LOG.debug("add partition: {} physicalPartition: {}", tPartition, physicalPartition);
                     }
@@ -666,7 +667,7 @@ public class OlapTableSink extends DataSink {
                     TOlapTablePartition tPartition = new TOlapTablePartition();
                     tPartition.setId(physicalPartition.getId());
                     // No lowerBound and upperBound for this range
-                    setIndexAndBucketNums(physicalPartition, tPartition);
+                    setMaterializedIndexes(physicalPartition, tPartition);
                     partitionParam.addToPartitions(tPartition);
                     LOG.debug("add partition: {} physicalPartition: {}", tPartition, physicalPartition);
                 }
@@ -741,11 +742,11 @@ public class OlapTableSink extends DataSink {
         }
     }
 
-    private static void setIndexAndBucketNums(PhysicalPartition partition, TOlapTablePartition tPartition) {
+    private static void setMaterializedIndexes(PhysicalPartition partition, TOlapTablePartition tPartition) {
         for (MaterializedIndex index : partition.getMaterializedIndices(IndexExtState.ALL)) {
-            tPartition.addToIndexes(new TOlapTableIndexTablets(index.getId(), Lists.newArrayList(
-                    index.getTablets().stream().map(Tablet::getId).collect(Collectors.toList()))));
-            tPartition.setNum_buckets(index.getTablets().size());
+            TOlapTableIndexTablets tIndex = new TOlapTableIndexTablets(index.getId(), index.getTabletIds());
+            tIndex.setVirtual_buckets(Lists.newArrayList(index.getVirtualBuckets()));
+            tPartition.addToIndexes(tIndex);
         }
     }
 
