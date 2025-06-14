@@ -1623,10 +1623,10 @@ struct TQueryStatisticsInfo {
     10: optional i64 memUsageBytes
     11: optional i64 spillBytes
     12: optional i64 execTime
-    13: optional string execProgress
-    14: optional string wareHouseName
-    15: optional string customQueryId
-    16: optional string resourceGroupName
+    13: optional string wareHouseName
+    14: optional string customQueryId
+    15: optional string resourceGroupName
+    16: optional string execProgress
 }
 
 struct TGetQueryStatisticsResponse {
@@ -2127,16 +2127,6 @@ struct TUpdateFailPointResponse {
     1: optional Status.TStatus status;
 }
 
-struct TUpdateTabletVersionRequest {
-    1: optional Types.TBackend backend;
-    2: optional i64 signature;
-    3: optional list<MasterService.TTabletVersionPair> tablet_versions;
-}
-
-struct TUpdateTabletVersionResult {
-    1: optional Status.TStatus status;
-}
-
 service FrontendService {
     TGetDbsResult getDbNames(1:TGetDbsParams params)
     TGetTablesResult getTableNames(1:TGetTablesParams params)
@@ -2278,7 +2268,5 @@ service FrontendService {
     TGetWarehouseQueriesResponse getWarehouseQueries(1: TGetWarehouseQueriesRequest request)
 
     TUpdateFailPointResponse updateFailPointStatus(1: TUpdateFailPointRequest request)
-
-    TUpdateTabletVersionResult updateTabletVersion(1: TUpdateTabletVersionRequest request)
 }
 

@@ -28,6 +28,7 @@
 #include "gutil/strings/fastmem.h"
 #include "gutil/strings/join.h"
 #include "runtime/current_thread.h"
+#include "runtime/load_fail_point.h"
 #include "runtime/runtime_state.h"
 #include "serde/protobuf_serde.h"
 #include "testutil/sync_point.h"
@@ -188,6 +189,7 @@ void NodeChannel::_open(int64_t index_id, RefCountClosure<PTabletWriterOpenResul
         // If the OlapTableSink node is responsible for writing the txn log, then the tablet writer
         // does not need to write the txn log again.
         request.mutable_lake_tablet_params()->set_write_txn_log(!_parent->_write_txn_log);
+        request.mutable_lake_tablet_params()->set_enable_data_file_bundling(_parent->_enable_data_file_bundling);
     }
     request.set_is_replicated_storage(_parent->_enable_replicated_storage);
     request.set_node_id(_node_id);
@@ -248,10 +250,14 @@ void NodeChannel::_open(int64_t index_id, RefCountClosure<PTabletWriterOpenResul
             LOG(ERROR) << res.status().message();
             return;
         }
+        FAIL_POINT_TRIGGER_EXECUTE(load_tablet_writer_open,
+                                   TABLET_WRITER_OPEN_FP_ACTION(_node_info->host, open_closure, request));
         res.value()->tablet_writer_open(&open_closure->cntl, &request, &open_closure->result, open_closure);
         VLOG(2) << "NodeChannel::_open() issue a http rpc, request size = " << request.ByteSizeLong();
     } else {
 #ifndef BE_TEST
+        FAIL_POINT_TRIGGER_EXECUTE(load_tablet_writer_open,
+                                   TABLET_WRITER_OPEN_FP_ACTION(_node_info->host, open_closure, request));
         _stub->tablet_writer_open(&open_closure->cntl, &request, &open_closure->result, open_closure);
 #else
         std::pair<PTabletWriterOpenRequest*, RefCountClosure<PTabletWriterOpenResult>*> rpc_pair{&request,
@@ -722,10 +728,15 @@ Status NodeChannel::_send_request(bool eos, bool finished) {
             }
             auto closure = _add_batch_closures[_current_request_index];
             serialize_to_iobuf<PTabletWriterAddChunksRequest>(request, &closure->cntl.request_attachment());
+            FAIL_POINT_TRIGGER_EXECUTE(load_tablet_writer_add_chunks,
+                                       TABLET_WRITER_ADD_CHUNKS_FP_ACTION(_node_info->host, closure, request));
             res.value()->tablet_writer_add_chunks_via_http(&closure->cntl, nullptr, &closure->result, closure);
             VLOG(2) << "NodeChannel::_send_request() issue a http rpc, request size = "
                     << closure->cntl.request_attachment().size();
         } else {
+            FAIL_POINT_TRIGGER_EXECUTE(load_tablet_writer_add_chunks,
+                                       TABLET_WRITER_ADD_CHUNKS_FP_ACTION(
+                                               _node_info->host, _add_batch_closures[_current_request_index], request));
             _stub->tablet_writer_add_chunks(&_add_batch_closures[_current_request_index]->cntl, &request,
                                             &_add_batch_closures[_current_request_index]->result,
                                             _add_batch_closures[_current_request_index]);
@@ -744,11 +755,16 @@ Status NodeChannel::_send_request(bool eos, bool finished) {
             auto closure = _add_batch_closures[_current_request_index];
             serialize_to_iobuf<PTabletWriterAddChunkRequest>(*request.mutable_requests(0),
                                                              &closure->cntl.request_attachment());
+            FAIL_POINT_TRIGGER_EXECUTE(load_tablet_writer_add_chunks,
+                                       TABLET_WRITER_ADD_CHUNKS_FP_ACTION(_node_info->host, closure, request));
             res.value()->tablet_writer_add_chunk_via_http(&closure->cntl, nullptr, &closure->result, closure);
             VLOG(2) << "NodeChannel::_send_request() issue a http rpc, request size = "
                     << closure->cntl.request_attachment().size();
         } else {
 #ifndef BE_TEST
+            FAIL_POINT_TRIGGER_EXECUTE(load_tablet_writer_add_chunks,
+                                       TABLET_WRITER_ADD_CHUNKS_FP_ACTION(
+                                               _node_info->host, _add_batch_closures[_current_request_index], request));
             _stub->tablet_writer_add_chunk(
                     &_add_batch_closures[_current_request_index]->cntl, request.mutable_requests(0),
                     &_add_batch_closures[_current_request_index]->result, _add_batch_closures[_current_request_index]);
@@ -1094,6 +1110,8 @@ void NodeChannel::_cancel(int64_t index_id, const Status& err_st) {
     closure->ref();
     closure->cntl.set_timeout_ms(_rpc_timeout_ms);
     SET_IGNORE_OVERCROWDED(closure->cntl, load);
+    FAIL_POINT_TRIGGER_EXECUTE(load_tablet_writer_cancel,
+                               TABLET_WRITER_CANCEL_FP_ACTION(_node_info->host, closure, closure->cntl, request));
     _stub->tablet_writer_cancel(&closure->cntl, &request, &closure->result, closure);
     request.release_id();
 }
