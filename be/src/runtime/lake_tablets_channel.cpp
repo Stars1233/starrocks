@@ -25,6 +25,7 @@
 #include "common/compiler_util.h"
 #include "common/statusor.h"
 #include "exec/tablet_info.h"
+#include "fs/bundle_file.h"
 #include "gen_cpp/internal_service.pb.h"
 #include "gutil/macros.h"
 #include "runtime/descriptors.h"
@@ -205,6 +206,8 @@ private:
 
     void _update_tablet_profile(DeltaWriter* writer, RuntimeProfile* profile);
 
+    bool _is_data_file_bundle_enabled(const PTabletWriterOpenRequest& params);
+
     LoadChannel* _load_channel;
     lake::TabletManager* _tablet_manager;
 
@@ -234,6 +237,8 @@ private:
     mutable bthreads::BThreadSharedMutex _rw_mtx;
     std::unordered_map<int64_t, uint32_t> _tablet_id_to_sorted_indexes;
     std::unordered_map<int64_t, std::unique_ptr<AsyncDeltaWriter>> _delta_writers;
+    // Partition id -> BundleWritableFileContext
+    std::unordered_map<int64_t, std::unique_ptr<BundleWritableFileContext>> _bundle_wfile_ctx_by_partition;
 
     GlobalDictByNameMaps _global_dicts;
     std::unique_ptr<MemPool> _mem_pool;
@@ -520,6 +525,7 @@ void LakeTabletsChannel::add_chunk(Chunk* chunk, const PTabletWriterAddChunkRequ
     auto start_wait_writer_ts = watch.elapsed_time();
     // Block the current bthread(not pthread) until all `write()` and `finish()` tasks finished.
     count_down_latch.wait();
+
     auto finish_wait_writer_ts = watch.elapsed_time();
 
     if (request.eos() || context->_response->status().status_code() == TStatusCode::OK) {
@@ -659,6 +665,11 @@ void LakeTabletsChannel::_flush_stale_memtables() {
     }
 }
 
+bool LakeTabletsChannel::_is_data_file_bundle_enabled(const PTabletWriterOpenRequest& params) {
+    return params.has_lake_tablet_params() && params.lake_tablet_params().has_enable_data_file_bundling() &&
+           params.lake_tablet_params().enable_data_file_bundling();
+}
+
 Status LakeTabletsChannel::_create_delta_writers(const PTabletWriterOpenRequest& params, bool is_incremental) {
     int64_t schema_id = 0;
     std::vector<SlotDescriptor*>* slots = nullptr;
@@ -696,6 +707,13 @@ Status LakeTabletsChannel::_create_delta_writers(const PTabletWriterOpenRequest&
     std::vector<int64_t> tablet_ids;
     tablet_ids.reserve(params.tablets_size());
     for (const PTabletWithPartition& tablet : params.tablets()) {
+        BundleWritableFileContext* bundle_writable_file_context = nullptr;
+        if (_is_data_file_bundle_enabled(params)) {
+            if (_bundle_wfile_ctx_by_partition.count(tablet.partition_id()) == 0) {
+                _bundle_wfile_ctx_by_partition[tablet.partition_id()] = std::make_unique<BundleWritableFileContext>();
+            }
+            bundle_writable_file_context = _bundle_wfile_ctx_by_partition[tablet.partition_id()].get();
+        }
         if (_delta_writers.count(tablet.tablet_id()) != 0) {
             // already created for the tablet, usually in incremental open case
             continue;
@@ -716,6 +734,7 @@ Status LakeTabletsChannel::_create_delta_writers(const PTabletWriterOpenRequest&
                                               .set_column_to_expr_value(&_column_to_expr_value)
                                               .set_load_id(params.id())
                                               .set_profile(_profile)
+                                              .set_bundle_writable_file_context(bundle_writable_file_context)
                                               .build());
         _delta_writers.emplace(tablet.tablet_id(), std::move(writer));
         tablet_ids.emplace_back(tablet.tablet_id());
@@ -732,6 +751,7 @@ Status LakeTabletsChannel::_create_delta_writers(const PTabletWriterOpenRequest&
             _tablet_id_to_sorted_indexes[tablet_ids[i]] = i;
         }
     }
+
     return Status::OK();
 }
 
