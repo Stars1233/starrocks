@@ -273,6 +273,7 @@ Status FragmentExecutor::_prepare_runtime_state(ExecEnv* exec_env, const Unified
         _query_ctx->set_is_runtime_filter_coordinator(true);
         exec_env->runtime_filter_worker()->open_query(query_id, query_options, *runtime_filter_params, true);
     }
+    _fragment_ctx->prepare_pass_through_chunk_buffer();
     _fragment_ctx->set_report_when_finish(request.unique().params.__isset.report_when_finish &&
                                           request.unique().params.report_when_finish);
 
@@ -967,6 +968,7 @@ void FragmentExecutor::_fail_cleanup(bool fragment_has_registed) {
             if (fragment_has_registed) {
                 _query_ctx->fragment_mgr()->unregister(_fragment_ctx->fragment_instance_id());
             }
+            _fragment_ctx->destroy_pass_through_chunk_buffer();
             _fragment_ctx.reset();
         }
         _query_ctx->count_down_fragments();
@@ -982,7 +984,9 @@ Status FragmentExecutor::append_incremental_scan_ranges(ExecEnv* exec_env, const
 
     QueryContextPtr query_ctx = exec_env->query_context_mgr()->get(query_id);
     if (query_ctx == nullptr) {
-        return Status::InternalError(fmt::format("QueryContext not found for query_id: {}", print_id(query_id)));
+        // query can be cancelled because of timeout or short-circuited query like `limit`.
+        // return Status::InternalError(fmt::format("QueryContext not found for query_id: {}", print_id(query_id)));
+        return Status::OK();
     }
     FragmentContextPtr fragment_ctx = query_ctx->fragment_mgr()->get(instance_id);
     if (fragment_ctx == nullptr) {
